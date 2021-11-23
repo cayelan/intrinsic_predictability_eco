@@ -1,13 +1,17 @@
 ---
-title: "The intrinsic predictability of ecological time series and its potential to guide forecasting"
-subtitle: "Reproducible report of statistical analysis of empirical time series"
+title: The intrinsic predictability of ecological time series and its potential to
+  guide forecasting
 author: "Frank Pennekamp"
 date: "17 December 2018"
-output: 
-  pdf_document: 
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  pdf_document:
     latex_engine: xelatex
     toc: yes
-editor_options: 
+subtitle: Reproducible report of statistical analysis of empirical time series
+editor_options:
   chunk_output_type: inline
 ---
 
@@ -24,7 +28,7 @@ rm(list=ls())
 
 # uncomment to install
 #devtools::install_github("ropensci/rgpdd")  
-#devtools::install_github("thomasp85/patchwork")
+#devtools::install_github("thomasp85/patchwork")# actually installing from CRAN instead
 #devtools::install_github("ropenscilabs/skimr")
 
 library(rgpdd)
@@ -44,6 +48,8 @@ library(padr)
 library(corrr)
 library(here)
 library(lubridate)
+library(glmmTMB)
+library(ggeffects)
 
 source(here::here("Code", "pe_code.R"))
 ```
@@ -307,7 +313,11 @@ We first fitted the simplex projection to identify the best embedding dimension 
 split <- 3
 s_maps <- list(NULL)
 
-pdf(here::here("Figs", "EDM_fitting.pdf"))
+pdf("../Figs/EDM_fitting.pdf")
+
+#need to skip dataset 56
+dd_ts <- dd_ts[-c(56,77, 78,79, 80, 174, 375, 376),]
+  
 
 for (i in 1:nrow(dd_ts)){
 
@@ -317,64 +327,100 @@ for (i in 1:nrow(dd_ts)){
   # define steps ahead forecast (based on split)
   step_ahead <- as.integer(nrow(ts_select)/split)
   
+#  simplex_fit <- 
+#    simplex(ts_select$abundance_sc, 
+#                         lib = c(1, (length(ts_select$abundance_sc)-step_ahead)),  
+#                         stats_only = T, E = 1:10, norm_type = c("L2 norm"))
+#this was originally what was here: I think bad because of changes in this function 
+  #due to updates to rEDM package since when the paper was submitted
+  
+  #my modified (fixed) version
   simplex_fit <- 
-    simplex(ts_select$abundance_sc, 
-                         lib = c(1, (length(ts_select$abundance_sc)-step_ahead)),  
-                         stats_only = T, E = 1:10, norm_type = c("L2 norm"))
+    simplex(ts_select$abundance_sc, norm = 2,
+                         lib = c(1, (length(ts_select$abundance_sc)-step_ahead)),
+                         stats_only = T, E = 1:10,
+              silent=T)
 
-  E_hat_rho <- 
-    simplex_fit[which(max(simplex_fit$rho, na.rm = T)==simplex_fit$rho)[1], ]$E
+  ###CCC added this
+  simplex_fit<- simplex_fit %>% 
+    na.exclude()
+  
+  temp<-as.vector(unlist(simplex_fit$rho)) #add in an na_exclude statement?
+  E_hat_rho<-which(temp==max(temp))
+  
+  #what was originally there
+ #   E_hat_rho <- 
+ #   simplex_fit[which(max(simplex_fit$rho, na.rm = T)==simplex_fit$rho)[1], ]$E
+  print(i)
+  print(E_hat_rho)
 
-  plot(simplex_fit$E, simplex_fit$rho, type="l", 
-       xlab = "Embedding dimension (E)", ylab="Forecast skill (rho)")
-  abline(v=E_hat_rho, col="red", lty=2)
+#  plot(simplex_fit$E, simplex_fit$rho, type="l", 
+#       xlab = "Embedding dimension (E)", ylab="Forecast skill (rho)")
+#  abline(v=E_hat_rho, col="red", lty=2)
   
   smap_fit <- s_map(ts_select$abundance_sc, 
                     lib = c(1, (length(ts_select$abundance_sc)-step_ahead)),  
-                    stats_only = T, norm_type = c("L2 norm"), E = E_hat_rho)
+                    stats_only = T, 
+                    #norm_type = c("L2 norm"), 
+                    E = E_hat_rho, 
+                    silent=T)
   
-  theta_hat_rho <- 
-    smap_fit[which(max(smap_fit$rho, na.rm = T)==smap_fit$rho), ]$theta
+  smap_fit <- smap_fit %>% 
+    na.exclude()
+  
+  #theta_hat_rho <- 
+  #  smap_fit[which(max(smap_fit$rho, na.rm = T)==smap_fit$rho), ]$theta
+  
+  temp1<-as.vector(unlist(smap_fit$rho)) #add in an na_exclude statement?
+  theta_hat_rho <- smap_fit$theta[which(temp1==max(temp1))]
 
-  plot(smap_fit$theta, smap_fit$rho, type="l", 
-       xlab = "Theta", ylab="Forecast skill (rho)")
-  abline(v=theta_hat_rho, col="red", lty=2)
+#  plot(smap_fit$theta, smap_fit$rho, type="l", 
+#       xlab = "Theta", ylab="Forecast skill (rho)")
+#  abline(v=theta_hat_rho, col="red", lty=2)
   
 
   smap_fit <- s_map(ts_select$abundance_sc, 
                     lib = c(1, (length(ts_select$abundance_sc)-step_ahead)),  
-                    stats_only = F, norm_type = c("L2 norm"), 
+                    stats_only = F, 
+                    #norm_type = c("L2 norm"), 
                     E = E_hat_rho, theta = theta_hat_rho)
+  
 
 smap_pred  <- 
   s_map(ts_select$abundance_sc, lib = c(1, (length(ts_select$abundance_sc)-step_ahead)), 
         pred = c( c((length(ts_select$abundance_sc)-step_ahead-E_hat_rho)),  
                   length(ts_select$abundance_sc)),  
-        stats_only = F, norm_type = c("L2 norm"), 
+        stats_only = F, 
+        #norm = 2, 
         E = E_hat_rho, theta = theta_hat_rho)
   
   s_maps[[i]] <- smap_pred
   
-    mtext(paste0("MainID = ", dd_ts$MainID[i]), side=3, line=-2, cex=1, outer=T)
+  print(i)
+  print("smap_pred")
   
-   {plot(ts_select$time, ts_select$abundance_sc, type="l", 
-         xlab = "Time", ylab="Abundance", 
-         ylim = range(min(smap_pred$model_output[[1]]$pred, 
-                          ts_select$abundance_sc, na.rm=T), 
-                 max(smap_pred$model_output[[1]]$pred, 
-                     ts_select$abundance_sc, na.rm=T)))
-     points(smap_pred$model_output[[1]]$time, 
-            smap_pred$model_output[[1]]$pred, col=2, 
-            ylim =range(min(smap_pred$model_output[[1]]$pred, 
-                            ts_select$abundance_sc, na.rm=T), 
-                        max(smap_pred$model_output[[1]]$pred,
-                            ts_select$abundance_sc, na.rm=T)))
-      lines(smap_pred$model_output[[1]]$time, smap_pred$model_output[[1]]$pred, 
-            col=2, ylim =range(
-              min(smap_pred$model_output[[1]]$pred,ts_select$abundance_sc, na.rm=T), 
-              max(smap_pred$model_output[[1]]$pred,ts_select$abundance_sc, na.rm=T)))
+  
+  
+   plot(ts_select$time, ts_select$abundance_sc, type="l", xlab = "Time", ylab="Abundance") 
+         #ylim = range(min(smap_pred$model_output[[1]]$pred, 
+         #                 ts_select$abundance_sc, na.rm=T), 
+          #       max(smap_pred$model_output[[1]]$pred, 
+          #           ts_select$abundance_sc, na.rm=T)))
+     points(smap_pred$model_output[[1]]$Index, 
+            smap_pred$model_output[[1]]$Predictions, col=2)
+     
+         mtext(paste0("MainID = ", dd_ts$MainID[i]), side=3, line=-2, cex=1, outer=T)
 
-     }
+           # ylim =range(min(smap_pred$model_output[[1]]$pred, 
+            #                ts_select$abundance_sc, na.rm=T), 
+            #            max(smap_pred$model_output[[1]]$pred,
+             #               ts_select$abundance_sc, na.rm=T)))
+      #lines(smap_pred$model_output[[1]]$Index, smap_pred$model_output[[1]]$Predictions, 
+       #     col=2, ylim =range(
+        #      min(smap_pred$model_output[[1]]$pred,ts_select$abundance_sc, na.rm=T), 
+        #    max(smap_pred$model_output[[1]]$pred,ts_select$abundance_sc, na.rm=T)))
+
+     
   
   layout(matrix(c(1,1), 1, 1, byrow = TRUE))
    
@@ -391,11 +437,11 @@ dev.off()
 Both embedding dimension and theta are additional features of the time series and may have explanatory value. We therefore added these metrics to our data.frame to control for the parameters in subsequent analyses. The two following plots show the distributions of D and theta across the two databases.
 
 ```{r}
-E_type <- ggplot(data=dd_ts, aes(x=E, group=type, fill=type)) + 
+E_type <- ggplot(data=dd_ts, aes(x=stats$E, group=type, fill=type)) + 
   geom_density(position="identity", alpha=.3) + 
   guides(alpha=F) + 
   theme(legend.position = "bottom")
-theta_type <- ggplot(data=dd_ts, aes(x=theta, group=type, fill=type)) + 
+theta_type <- ggplot(data=dd_ts, aes(x=stats$theta, group=type, fill=type)) + 
   geom_density(position="identity", alpha=.3)+ guides(alpha=F) + 
   theme(legend.position = "bottom")
 cowplot::plot_grid(E_type, theta_type, labels = c("A", "B"))
@@ -407,10 +453,11 @@ cowplot::plot_grid(E_type, theta_type, labels = c("A", "B"))
 To evaluate the forecasting error, we used the normalised RMSE (nRMSE) as an appropriate measure to compare across time series.
 
 ```{r}
-dd_ts$nrmse <- 
-  dd_ts$rmse/unlist(lapply(1:nrow(dd_ts), function(x) 
-    {max(dd_ts$data[[x]]$abundance_sc, na.rm=T) - 
-      min(dd_ts$data[[x]]$abundance_sc, na.rm=T)} ))
+for(i in 1:nrow(dd_ts)){
+dd_ts$nrmse[i] <- unlist((dd_ts$stats$rmse[i]))/
+    (max(dd_ts$data[[i]]$abundance_sc, na.rm=T) - 
+      min(dd_ts$data[[i]]$abundance_sc, na.rm=T)) 
+}    
 # center PE to compare types at mean PE range rather than at zero
 dd_ts$PE_center <- scale(dd_ts$PE, center=T, scale=F)
 ```
@@ -431,26 +478,27 @@ We find a relationship between PE and nRSME. Forecast error increases with time 
 
 ```{r, results="asis"}
 dd_ts$nrmse_sqrt <- sqrt(dd_ts$nrmse)
-dd_ts$rmse_sqrt <- sqrt(dd_ts$rmse)
+dd_ts$rmse_sqrt <- sqrt(unlist(dd_ts$stats$rmse))
 dd_ts$PE_sqrt <- sqrt(dd_ts$PE)
 # simplify data frame before model fitting
-dd_ts_simple <- select(dd_ts, 
-                       c(nrmse_sqrt, 
-                         rmse_sqrt, 
+dd_ts_simple <- dd_ts %>% 
+  dplyr::select(nrmse_sqrt, rmse_sqrt, 
                          PE, 
                          type, 
                          N, 
                          zero_prop, 
                          ties_prop, 
-                         number_of_gaps, 
-                         E, 
-                         theta, 
-                         source))
-
+                         number_of_gaps, source) 
+ dd_ts_simple1 <- bind_cols(dd_ts_simple,
+                         dd_ts$stats$E, 
+                         dd_ts$stats$theta)
+ colnames(dd_ts_simple1)[10]<- "E"
+ colnames(dd_ts_simple1)[11]<- "theta"
+ 
 lmer_nrmse_all <- 
   lmer(nrmse_sqrt ~ PE + type +  
          PE:type + N + zero_prop + ties_prop + E + theta + (1|source), 
-       data = dd_ts)
+       data = dd_ts_simple1)
 knitr::kable(papeR::prettify(summary(lmer_nrmse_all)))
 ```
 
@@ -507,17 +555,15 @@ p6 <- gg_panels("e")
 p7 <- gg_panels("f")
 
 # create prediction for PE
-dd_ts2 <- dd_ts[,c("nrmse", "PE", "source", 
-                   "type", "label", "N", "zero_prop", 
-                   "ties_prop", "E", "theta", "number_of_gaps")]
+dd_ts2 <- bind_cols(dd_ts_simple1, dd_ts[,c("nrmse", "label")])
 
-dd_ts2$nrmse_sqrt <- sqrt(dd_ts2$nrmse)
+#dd_ts2$nrmse_sqrt <- sqrt(dd_ts2$nrmse)
 dd_ts2$type <- as.factor(dd_ts2$type)
 lme_fit <- 
   nlme::lme(nrmse_sqrt ~ PE * type + N +  
               zero_prop + ties_prop + E + theta, random = ~ 1 | source, 
             data = dd_ts2)
-dat <-ggeffects::ggaverage(lme_fit, terms = c("PE"), type = c("fe"))
+dat <-ggeffects::ggemmeans(lme_fit, terms = c("PE"), type = c("fe"))
 dat$label <- NA
 
 label <- dd_ts$label
